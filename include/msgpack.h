@@ -20,12 +20,13 @@
  * SOFTWARE.
  */
 
+#ifndef MSGPACK_H
+#define MSGPACK_H
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#ifndef MSGPACK_H
-#define MSGPACK_H
+#include "msgpack_conf.h"
 
 enum {
   MSGPACK_EOK = 0,
@@ -39,7 +40,7 @@ enum {
 };
 
 
-#define POS_FIXNUM_TAG  0x00 // 0x00 ~ 0x7f (0 ~ 127)
+#define POS_FIXNUM_TAG       0x00 // 0x00 ~ 0x7f (0 ~ 127)
 #define FIXMAP_TAG           0x80 // 0x80 ~ 0x8f
 #define FIXARRAY_TAG         0x90 // 0x90 ~ 0x9f
 #define FIXSTR_TAG           0xA0 // 0xa0 ~ 0xbf
@@ -74,7 +75,7 @@ enum {
 #define ARRAY32_TAG          0xDD
 #define MAP16_TAG            0xDE
 #define MAP32_TAG            0xDF
-#define NEG_FIXNUM_TAG  0xE0 // 0xE0 ~ 0xFF (-32 ~ -1)
+#define NEG_FIXNUM_TAG       0xE0 // 0xE0 ~ 0xFF (-32 ~ -1)
 
 enum {
   MSGPACK_TYPE_ANY     = 0x00,
@@ -94,9 +95,9 @@ enum {
   MSGPACK_TYPE_DOUBLE  = 0x42,
   MSGPACK_TYPE_STR     = 0x50,
   MSGPACK_TYPE_BIN     = 0x60,
-  // MSGPACK_TYPE_ARRAY,   /* 15 */
-  // MSGPACK_TYPE_MAP,     /* 16 */
-  // MSGPACK_TYPE_EXT,     /* 17 */
+  MSGPACK_TYPE_ARRAY   = 0x70,
+  MSGPACK_TYPE_MAP     = 0x80,
+  // MSGPACK_TYPE_EXT     = 0x90,
 };
 
 #ifdef  __cplusplus
@@ -105,7 +106,7 @@ extern "C"
 #endif
 
 int msgpack_errno(void);
-#if !defined(MSGPACK_SIZE_OPT)
+#if !MSGPACK_SIZE_OPT
 const char *msgpack_errmsg(void);
 #else
 #define msgpack_errmsg ""
@@ -277,6 +278,50 @@ bool msgpack_data_double(struct msgpack_buffer *mbuf, uint8_t type,
   ((len) >> 16 == 0) ? BIN16_TAG : BIN32_TAG
 #define msgpack_write_bin(mbuf, bin, len) \
   msgpack_len_data(mbuf, msgpack_bin_type(len), bin, len, msgpack_bin_lensize(len))
+
+/**
+ * @}
+ */
+
+/**
+ * @name Array
+ * @{
+ */
+
+#define msgpack_write_smallarr(mbuf, len) \
+  msgpack_len_data(mbuf, FIXARRAY_TAG, NULL, len, 0)
+#define msgpack_write_arr16(mbuf, len) \
+  msgpack_len_data(mbuf, ARRAY16_TAG, NULL, len, 2)
+#define msgpack_write_arr32(mbuf, len) \
+  msgpack_len_data(mbuf, ARRAY32_TAG, NULL, len, 4)
+#define msgpack_arr_lensize(len) ((len) >> 4 == 0) ? 0 : \
+  ((len) >> 16 == 0) ? 2 : 4
+#define msgpack_arr_type(len) ((len) >> 4 == 0) ? FIXARRAY_TAG : \
+  ((len) >> 16 == 0) ? ARRAY16_TAG : ARRAY32_TAG
+#define msgpack_write_arr(mbuf, len) \
+  msgpack_len_data(mbuf, msgpack_arr_type(len), NULL, len, msgpack_arr_lensize(len))
+
+/**
+ * @}
+ */
+
+/**
+ * @name Map
+ * @{
+ */
+
+#define msgpack_write_smallmap(mbuf, len) \
+  msgpack_len_data(mbuf, FIXMAP_TAG, NULL, len, 0)
+#define msgpack_write_map16(mbuf, len) \
+  msgpack_len_data(mbuf, MAP16_TAG, NULL, len, 2)
+#define msgpack_write_map32(mbuf, len) \
+  msgpack_len_data(mbuf, MAP32_TAG, NULL, len, 4)
+#define msgpack_map_lensize(len) ((len) >> 4 == 0) ? 0 : \
+  ((len) >> 16 == 0) ? 2 : 4
+#define msgpack_map_type(len) ((len) >> 4 == 0) ? FIXMAP_TAG : \
+  ((len) >> 16 == 0) ? MAP16_TAG : MAP32_TAG
+#define msgpack_write_map(mbuf, len) \
+  msgpack_len_data(mbuf, msgpack_map_type(len), NULL, len, msgpack_map_lensize(len))
 
 /**
  * @}

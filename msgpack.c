@@ -24,6 +24,10 @@
 
 #include "msgpack.h"
 
+#define FIX_TAG_MASK 0xC0
+#define FIX_TAG      0x80 /* (FIXMAP_TAG || FIXARRAY_TAG || FIXSTR_TAG) */
+#define FIXSTR_TAG_MASK 0xE0
+
 static int g_errno = 0;
 
 inline int msgpack_errno(void) {
@@ -34,7 +38,7 @@ static void set_errno(int errno) {
   g_errno = errno;
 }
 
-#if !defined(MSGPACK_SIZE_OPT)
+#if !MSGPACK_SIZE_OPT
 const char *g_errmsgs[MSGPACK_EMAX] = {
   "No Error",
   "Unknown Error",
@@ -51,8 +55,8 @@ const char *msgpack_errmsg(void) {
 #endif
 
 #define type_mask(t) (0xF0 & (t))
-static const int16_t _i = 1;
-#define is_bigendian() ((*(uint8_t *)&_i) == 0)
+static const int32_t _i = 1;
+#define is_bigendian() ((*(char *)&_i) == 0)
 
 bool msgpack_byte(struct msgpack_buffer *mbuf, uint8_t data) {
   if (!mbuf) {
@@ -118,7 +122,7 @@ bool msgpack_len_data(struct msgpack_buffer *mbuf, uint8_t type, const void *dat
   int i;
   int index;
 
-  if (!mbuf || !data) {
+  if (!mbuf) {
     set_errno(MSGPACK_EINVL);
     goto error;
   }
@@ -129,12 +133,12 @@ bool msgpack_len_data(struct msgpack_buffer *mbuf, uint8_t type, const void *dat
   }
 
   set_errno(MSGPACK_EOK);
-  if (mbuf->alloc <= mbuf->len + len + len_size) {
+  if (mbuf->alloc <= mbuf->len + len_size + (data ? len : 0)) {
     set_errno(MSGPACK_ENOBUF);
     goto error;
   }
 
-  if (type == FIXSTR_TAG) {
+  if ((type & FIX_TAG_MASK) == FIX_TAG) {
     type |= (uint8_t)len;
   }
   mbuf->buf[mbuf->len++] = type;
@@ -145,8 +149,10 @@ bool msgpack_len_data(struct msgpack_buffer *mbuf, uint8_t type, const void *dat
     }
     mbuf->buf[mbuf->len++] = ((uint8_t *)&len)[index];
   }
-  memcpy(mbuf->buf + mbuf->len, data, len);
-  mbuf->len += len;
+  if (data) {
+    memcpy(mbuf->buf + mbuf->len, data, len);
+    mbuf->len += len;
+  }
   return true;
 
 error:
@@ -231,6 +237,7 @@ bool msgpack_unpack(struct msgpack_unpacker *up, void *data, uint32_t *data_len,
   bool has_len;
   size_t len_size;
   bool endian;
+  bool len_ok = false;
   uint8_t m_type = MSGPACK_TYPE_ANY;
   size_t read = 0;
   bool ret;
@@ -276,13 +283,16 @@ bool msgpack_unpack(struct msgpack_unpacker *up, void *data, uint32_t *data_len,
     goto error;
   }
 
-  if (head >= FIXSTR_TAG && head < NIL_TAG) {
+  if ((head & FIXSTR_TAG_MASK) == FIXSTR_TAG) {
     len = head & 0x1F;
     head = FIXSTR_TAG;
-  } else if (head >= POS_FIXNUM_TAG && head < FIXMAP_TAG) {
+  } else if ((head & FIX_TAG_MASK) == FIX_TAG) {
+    len = head & 0x0F;
+    head = head & 0xF0;
+  } else if ((head & 0x80) == POS_FIXNUM_TAG) { /* positive fixnum */
     m_type = MSGPACK_TYPE_U8;
     goto read_head_data;
-  } else if (head >= NEG_FIXNUM_TAG) {
+  } else if ((head & 0xE0) == NEG_FIXNUM_TAG) { /* negative fixnum */
     m_type = MSGPACK_TYPE_S8;
     goto read_head_data;
   } else if (head == FALSE_TAG || head == TRUE_TAG) {
@@ -305,15 +315,9 @@ read_head_data:
   has_len = false;
   endian = false;
   switch (head) {
-    // case FIXMAP_TAG:
-    // case FIXARRAY_TAG:
+    case FIXMAP_TAG: goto map_break;
+    case FIXARRAY_TAG: goto arr_break;
     case FIXSTR_TAG: goto str_break;
-//     case FALSE_TAG: *(bool *)data = false; goto bool_break;
-//     case TRUE_TAG: *(bool *)data = true; goto bool_break;
-// bool_break:
-//       m_type = MSGPACK_TYPE_BOOL;
-//       len = 1;
-//       goto exit;
     case BIN8_TAG: len_size = 1; goto bin_break;
     case BIN16_TAG: len_size = 2; goto bin_break;
     case BIN32_TAG: len_size = 4; goto bin_break;
@@ -348,10 +352,18 @@ endian_break:
 str_break:
       m_type = MSGPACK_TYPE_STR;
       break;
-    // case ARRAY16_TAG:
-    // case ARRAY32_TAG:
-    // case MAP16_TAG:
-    // case MAP32_TAG:
+    case ARRAY16_TAG: has_len = true; len_size = 2; goto arr_break;
+    case ARRAY32_TAG: has_len = true; len_size = 4; goto arr_break;
+arr_break:
+      len_ok = true;
+      m_type = MSGPACK_TYPE_ARRAY;
+      break;
+    case MAP16_TAG: has_len = true; len_size = 2; goto map_break;
+    case MAP32_TAG: has_len = true; len_size = 4; goto map_break;
+map_break:
+      len_ok = true;
+      m_type = MSGPACK_TYPE_MAP;
+      break;
     default: set_errno(MSGPACK_EUNKNOWN); goto error;
   }
 
@@ -365,6 +377,11 @@ str_break:
       goto error;
     }
     read += len_size;
+  }
+
+  /* Only read length, case as array and map type. */
+  if (len_ok) {
+    goto exit;
   }
 
   /* Just return data len. */
